@@ -55,7 +55,10 @@ describe('game', () => {
     assert.ok(account.playerAccounts[0].tokenAccount.toString() === tokenAccount.toString());
   });
 
-  it("Plays!", async () => {
+  const table = anchor.web3.Keypair.generate();
+  const player = anchor.web3.Keypair.generate();
+
+  it("Bets!", async () => {
     await program.rpc.proxyMintTo(new anchor.BN(1000), {
       accounts: {
         authority: provider.wallet.publicKey,
@@ -68,7 +71,6 @@ describe('game', () => {
     let account = await getTokenAccount(provider, tokenAccount);
     assert.ok(account.amount.eq(new anchor.BN(1000)));
 
-    const table = anchor.web3.Keypair.generate();
     await program.rpc.newTable({
       accounts: {
         table: table.publicKey,
@@ -79,7 +81,6 @@ describe('game', () => {
       signers: [table]
     });
 
-    const player = anchor.web3.Keypair.generate();
     await program.rpc.newPlayer({
       accounts: {
         player: player.publicKey,
@@ -93,8 +94,6 @@ describe('game', () => {
     await program.rpc.connectToTable({
       accounts: {
         table: table.publicKey,
-        baseAccount: baseAccount.publicKey,
-        user: provider.wallet.publicKey,
         player: player.publicKey,
       },
     });
@@ -112,7 +111,9 @@ describe('game', () => {
 
     account = await getTokenAccount(provider, tokenAccount);
     assert.ok(account.amount.eq(new anchor.BN(900)));
+  });
 
+  it("Deals!", async () => {
     await program.rpc.getHand({
       accounts: {
         player: player.publicKey,
@@ -125,7 +126,24 @@ describe('game', () => {
     assert.ok(account1.deck.cards.length === 48);
 
     let account2 = await program.account.player.fetch(player.publicKey);
-    // console.log(account2);
-    assert.ok(account2.hand.length === 2);
+    // console.log(account2.hand);
+    assert.ok(account2.hand.cards.length === 2);
+  });
+
+  it("Hits!", async () => {
+    await program.rpc.hit({
+      accounts: {
+        player: player.publicKey,
+        table: table.publicKey,
+      },
+    });
+
+    let account1 = await program.account.table.fetch(table.publicKey);
+    // console.log(account1.playerAccounts[0].key, account1.playerAccounts[0].value);
+    assert.ok(account1.deck.cards.length === 52);
+
+    let account2 = await program.account.player.fetch(player.publicKey);
+    // console.log(account2.hand);
+    assert.ok(account2.stake.toString() === "0");
   });
 });

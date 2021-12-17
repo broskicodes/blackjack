@@ -101,8 +101,6 @@ describe('blackjack', () => {
     await program.rpc.connectToTable({
       accounts: {
         table: table.publicKey,
-        baseAccount: baseAccount.publicKey,
-        user: provider.wallet.publicKey,
         player: player1.publicKey,
       },
     });

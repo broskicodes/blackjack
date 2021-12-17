@@ -34,7 +34,6 @@ pub mod blackjack {
 
   pub fn initialize(ctx: Context<Initialize>) -> ProgramResult {
     let base_account = &mut ctx.accounts.base_account;
-    let user = &mut ctx.accounts.user;
 
     base_account.player_accounts = Vec::new();
     base_account.num_player_acnts = 0;
@@ -75,7 +74,12 @@ pub mod blackjack {
       base_account.num_player_acnts += 1;
     }
 
-    player.hand = Vec::new();
+    let hand = Hand {
+      cards: Vec::new(),
+      value: 0,
+      is_bust: false
+    };
+    player.hand = hand;
     player.stake = 0;
 
     Ok(())
@@ -83,18 +87,23 @@ pub mod blackjack {
 
   pub fn new_table(ctx: Context<NewTable>) -> ProgramResult {
     let base_account = &mut ctx.accounts.base_account;
-    let user = &mut ctx.accounts.user;
+    // let user = &mut ctx.accounts.user;
     let table = &mut ctx.accounts.table;
 
     base_account.tables.push(*table.to_account_info().key);
     base_account.num_tables += 1;
 
+    let hand = Hand {
+      cards: Vec::new(),
+      value: 0,
+      is_bust: false
+    };
+    table.dealer = Dealer { hand: hand };
     table.deck = Deck::new(1);
     table.players = Vec::new();
     table.num_players = 0;
     table.payout_ratio = Ratio { mult: 2, div: 1 };
     table.blackjack_ratio = Ratio { mult: 15, div: 10 };
-    table.dealer = Dealer { hand: Vec::new() };
     table.min_bet = 1;
     table.max_bet = 1000;
 
@@ -102,8 +111,6 @@ pub mod blackjack {
   }
 
   pub fn connect_to_table(ctx: Context<ConnectToTable>) -> ProgramResult {
-    let base_account = &mut ctx.accounts.base_account;
-    let user = &mut ctx.accounts.user;
     let table = &mut ctx.accounts.table;
     let player = &mut ctx.accounts.player;
 
@@ -167,6 +174,9 @@ pub mod blackjack {
       } else if bet > table.max_bet {
         Err(ErrorCode::BigBet.into())
       } else {
+        player.hand.clear();
+        table.dealer.hand.clear();
+
         let accounts = &mut ProxyBurn {
           mint: ctx.accounts.mint.clone(),
           to: ctx.accounts.to.clone(),
@@ -196,13 +206,34 @@ pub mod blackjack {
       Err(ErrorCode::NoStake.into())
     } else{
       let deck = &mut table.deck.clone();
+      deck.shuffle();
+
       for _i in 0..2 {
         let mut c = deck.get_card();
-        table.dealer.hand.push(c);
+        table.dealer.hand.add_card(c);
         c = deck.get_card();
-        player.hand.push(c);
+        player.hand.add_card(c);
+      }
+      table.deck = deck.clone();
 
-        table.deck = deck.clone();
+      Ok(())
+    }
+  }
+
+  pub fn hit(ctx: Context<Hit>) -> ProgramResult {
+    let table = &mut ctx.accounts.table;
+    let player = &mut ctx.accounts.player;
+
+    if player.stake == 0 {
+      Err(ErrorCode::NoStake.into())
+    } else{
+      let deck = &mut table.deck;
+      let c = deck.get_card();
+      player.hand.add_card(c);
+
+      if player.hand.is_bust {
+        deck.merge();
+        player.stake = 0;
       }
 
       Ok(())
@@ -221,7 +252,7 @@ pub struct Initialize<'info> {
 
 #[derive(Accounts)]
 pub struct NewPlayer<'info> {
-  #[account(init, payer = user, space = 64 + 64)]
+  #[account(init, payer = user, space = 64 + 64 + 64)]
   pub player: Account<'info, Player>,
   #[account(mut)]
   pub base_account: Account<'info, BaseAccount>,
@@ -232,7 +263,7 @@ pub struct NewPlayer<'info> {
 
 #[derive(Accounts)]
 pub struct NewTable<'info> {
-  #[account(init, payer = user, space = 64 + 64 + 64 + 64)]
+  #[account(init, payer = user, space = 64 + 64 + 64 + 64 + 64)]
   pub table: Account<'info, Table>,
   #[account(mut)]
   pub base_account: Account<'info, BaseAccount>,
@@ -244,13 +275,9 @@ pub struct NewTable<'info> {
 #[derive(Accounts)]
 pub struct ConnectToTable<'info> {
   #[account(mut)]
-  pub base_account: Account<'info, BaseAccount>,
-  #[account(mut)]
   pub player: Account<'info, Player>,
   #[account(mut)]
   pub table: Account<'info, Table>,
-  #[account(mut)]
-  pub user: Signer<'info>,
 }
 
 #[derive(Accounts)]
@@ -286,6 +313,14 @@ pub struct GetHand<'info> {
   pub table: Account<'info, Table>,
 }
 
+#[derive(Accounts)]
+pub struct Hit<'info> {
+  #[account(mut)]
+  pub player: Account<'info, Player>,
+  #[account(mut)]
+  pub table: Account<'info, Table>,
+}
+
 #[derive(Debug, EnumIter, Copy, Clone, AnchorDeserialize, AnchorSerialize)]
 pub enum Suit {
   Heart,
@@ -294,8 +329,8 @@ pub enum Suit {
   Spade,
 }
 
-#[derive(Debug, Clone, Copy, AnchorDeserialize, AnchorSerialize)]
-pub enum CardValue {
+#[derive(Debug, Clone, Copy, AnchorDeserialize, AnchorSerialize, Eq, PartialEq)]
+pub enum CardKind {
   Ace,
   Two,
   Three,
@@ -314,13 +349,14 @@ pub enum CardValue {
 #[derive(Debug, Clone, AnchorDeserialize, AnchorSerialize)]
 pub struct Card {
   pub suit: Suit,
-  pub val: CardValue,
+  pub kind: CardKind,
+  pub value: u8
 }
 
 #[derive(Debug, Clone, AnchorSerialize, AnchorDeserialize)]
 pub struct Deck {
   pub cards: Vec<Card>,
-  pub val_map: Vec<CardMap>,
+  // pub val_map: Vec<CardMap>,
   pub pile: Vec<Card>,
 }
 
@@ -328,7 +364,7 @@ impl Deck {
   pub fn new(num_decks: u8) -> Deck {
     let mut deck = Deck {
       cards: Vec::new(),
-      val_map: Vec::new(),
+      // val_map: Vec::new(),
       pile: Vec::new(),
     };
 
@@ -339,29 +375,29 @@ impl Deck {
         _ => 10
       };
 
-      let val: Option<CardValue> = match i {
-        0 => Some(CardValue::Ace),
-        1 => Some(CardValue::Two),
-        2 => Some(CardValue::Three),
-        3 => Some(CardValue::Four),
-        4 => Some(CardValue::Five),
-        5 => Some(CardValue::Six),
-        6 => Some(CardValue::Seven),
-        7 => Some(CardValue::Eight),
-        8 => Some(CardValue::Nine),
-        9 => Some(CardValue::Ten),
-        10 => Some(CardValue::Jack),
-        11 => Some(CardValue::Queen),
-        12 => Some(CardValue::King),
+      let kind: Option<CardKind> = match i {
+        0 => Some(CardKind::Ace),
+        1 => Some(CardKind::Two),
+        2 => Some(CardKind::Three),
+        3 => Some(CardKind::Four),
+        4 => Some(CardKind::Five),
+        5 => Some(CardKind::Six),
+        6 => Some(CardKind::Seven),
+        7 => Some(CardKind::Eight),
+        8 => Some(CardKind::Nine),
+        9 => Some(CardKind::Ten),
+        10 => Some(CardKind::Jack),
+        11 => Some(CardKind::Queen),
+        12 => Some(CardKind::King),
         _ => None
       };
 
-      deck.val_map.push(CardMap { key: val.unwrap(), value: num });
+      // deck.kind_map.push(CardMap { key: kind.unwrap(), kindue: num });
 
 
       for suit in Suit::iter() {
         for _j in 0..num_decks {
-          deck.cards.push(Card { suit: suit, val: val.unwrap() });
+          deck.cards.push(Card { suit: suit, kind: kind.unwrap(), value: num });
         }
       }
     }
@@ -379,13 +415,18 @@ impl Deck {
 
     c
   }
+
+  pub fn merge(&mut self) {
+    self.cards.append(&mut self.pile);
+    self.pile = Vec::new();
+  }
 }
 
-#[derive(Debug, Clone, AnchorSerialize, AnchorDeserialize)]
-pub struct CardMap {
-  pub key: CardValue,
-  pub value: u8,
-}
+// #[derive(Debug, Clone, AnchorSerialize, AnchorDeserialize)]
+// pub struct CardMap {
+//   pub key: CardKind,
+//   pub value: u8,
+// }
 
 #[derive(Debug, Clone, AnchorSerialize, AnchorDeserialize)]
 pub struct PlayerMap {
@@ -401,9 +442,46 @@ pub struct Ratio {
 }
 
 #[derive(Debug, Clone, AnchorSerialize, AnchorDeserialize)]
-pub struct Dealer {
-  pub hand: Vec<Card>,
+pub struct Hand {
+  pub cards: Vec<Card>,
+  pub value: u8,
+  pub is_bust: bool,
 }
+
+impl Hand {
+  pub fn add_card(&mut self, card: Card) {
+    self.cards.push(card.clone());
+    self.value += card.value;
+
+    if self.value > 21 {
+      let mut all_good = false;
+      for c in self.cards.iter_mut() {
+        if c.kind == CardKind::Ace && c.value == 11 {
+          c.value -= 10;
+          self.value -= 10;
+          all_good = true;
+          break;
+        }
+      }
+
+      if !all_good {
+        self.is_bust = true;
+      }
+    }
+  }
+
+  pub fn clear(&mut self) {
+    self.cards = Vec::new();
+    self.value = 0;
+    self.is_bust = false;
+  }
+}
+
+#[derive(Debug, Clone, AnchorSerialize, AnchorDeserialize)]
+pub struct Dealer {
+  pub hand: Hand,
+}
+
 
 
 
@@ -428,7 +506,7 @@ pub struct BaseAccount {
 
 #[account]
 pub struct Player {
-  pub hand: Vec<Card>, 
+  pub hand: Hand, 
   pub stake: u64,
 }
 
