@@ -1,14 +1,37 @@
 use anchor_lang::prelude::*;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
-// use std::collections::HashMap;
-// use fixed::{ FixedU64 };
+
+pub mod token;
+
+use token::*;
 
 declare_id!("Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS");
 
 #[program]
 pub mod blackjack {
   use super::*;
+
+  pub fn proxy_transfer(ctx: Context<ProxyTransfer>, amount: u64) -> ProgramResult {
+    token::proxy_transfer(ctx, amount)
+  }
+  
+  pub fn proxy_mint_to(ctx: Context<ProxyMintTo>, amount: u64) -> ProgramResult {
+    token::proxy_mint_to(ctx, amount)
+  }
+  
+  pub fn proxy_burn(ctx: Context<ProxyBurn>, amount: u64) -> ProgramResult {
+    token::proxy_burn(ctx, amount)
+  }
+  
+  pub fn proxy_set_authority(
+    ctx: Context<ProxySetAuthority>, 
+    authority_type: AuthorityType, 
+    new_authority: Option<Pubkey>
+  ) -> ProgramResult {
+    token::proxy_set_authority(ctx, authority_type, new_authority)
+  }
+
   pub fn initialize(ctx: Context<Initialize>) -> ProgramResult {
     let base_account = &mut ctx.accounts.base_account;
     let user = &mut ctx.accounts.user;
@@ -42,7 +65,13 @@ pub mod blackjack {
     }    
     
     if !player_exists {
-      base_account.player_accounts.push(PlayerMap { key: *user.to_account_info().key, value: vec![*player.to_account_info().key] });
+      base_account.player_accounts.push(
+        PlayerMap { 
+          key: *user.to_account_info().key,
+          value: vec![*player.to_account_info().key], 
+          token_account: None 
+        }
+      );
       base_account.num_player_acnts += 1;
     }
 
@@ -67,7 +96,7 @@ pub mod blackjack {
     table.blackjack_ratio = Ratio { mult: 15, div: 10 };
     table.dealer = Dealer { hand: Vec::new() };
     table.min_bet = 1;
-    table.max_bet = 100;
+    table.max_bet = 1000;
 
     Ok(())
   }
@@ -84,21 +113,101 @@ pub mod blackjack {
     Ok(())
   }
 
-  // pub fn make_bet(ctx: Context<MakeBet>, bet: u64) -> Result<()> {
-  //   let base_account = &mut ctx.accounts.base_account;
-  //   // let user = &mut ctx.accounts.user;
-  //   let table = &mut ctx.accounts.table;
-  //   let player = &mut ctx.accounts.player;
+  pub fn set_token_account(ctx: Context<SetTokenAccount>) -> ProgramResult {
+    let base_account = &mut ctx.accounts.base_account;
+    let user = &mut ctx.accounts.user;
+    let token_account = &mut ctx.accounts.token_account;
+    
+    let mut player_exists = false;
+    for i in 0..base_account.num_player_acnts {
+      let index: usize = i as usize;
 
-  //   if bet < table.min_bet {
-  //     Err(ErrorCode::SmallBet.into())
-  //   } else if bet > table.max_bet {
-  //     Err(ErrorCode::BigBet.into())
-  //   } else {
-      
-  //   }
+      if base_account.player_accounts[index].key == *user.to_account_info().key {
+        base_account.player_accounts[index].token_account = Some(*token_account.key);
+        player_exists = true;
+        break;
+      }
+    }
 
-  // }
+    if !player_exists {
+      base_account.player_accounts.push(
+        PlayerMap { 
+          key: *user.to_account_info().key,
+          value: Vec::new(), 
+          token_account: Some(*token_account.key), 
+        }
+      );
+      base_account.num_player_acnts += 1;
+    }
+
+    Ok(())
+  }
+
+  pub fn make_bet(ctx: Context<MakeBet>, bet: u64) -> ProgramResult {
+    // let base_account = &mut ctx.accounts.base_account;
+    // let user = &mut ctx.accounts.user;
+    let table = &mut ctx.accounts.table;
+    let player = &mut ctx.accounts.player;
+
+    let mut player_exists = false;
+    for i in 0..table.num_players {
+      let index: usize = i as usize;
+
+      if table.players[index] == *player.to_account_info().key {
+        player_exists = true;
+        break;
+      }
+    }
+
+    if !player_exists {
+      Err(ErrorCode::NotSeated.into())
+    } else {
+      if bet < table.min_bet {
+        Err(ErrorCode::SmallBet.into())
+      } else if bet > table.max_bet {
+        Err(ErrorCode::BigBet.into())
+      } else {
+        let accounts = &mut ProxyBurn {
+          mint: ctx.accounts.mint.clone(),
+          to: ctx.accounts.to.clone(),
+          authority: ctx.accounts.authority.clone(),
+          token_program: ctx.accounts.token_program.clone(),
+        };
+        // Prolly shouldn't burn first
+        let context = Context::new(ctx.accounts.token_program.key, accounts, &[]);
+        let result = token::proxy_burn(context, bet);
+
+        match result {
+          Ok(_a) => {
+            player.stake = bet;
+            result
+          },
+          _ => result
+        }
+      }
+    }
+  }
+
+  pub fn get_hand(ctx: Context<GetHand>) -> ProgramResult {
+    let table = &mut ctx.accounts.table;
+    let player = &mut ctx.accounts.player;
+
+    if player.stake == 0 {
+      Err(ErrorCode::NoStake.into())
+    } else{
+      let deck = &mut table.deck.clone();
+      for _i in 0..2 {
+        let mut c = deck.get_card();
+        table.dealer.hand.push(c);
+        c = deck.get_card();
+        player.hand.push(c);
+
+        table.deck = deck.clone();
+      }
+
+      Ok(())
+    }
+  }
 }
 
 #[derive(Accounts)]
@@ -145,9 +254,32 @@ pub struct ConnectToTable<'info> {
 }
 
 #[derive(Accounts)]
-pub struct MakeBet<'info> {
+pub struct SetTokenAccount<'info> {
   #[account(mut)]
   pub base_account: Account<'info, BaseAccount>,
+  #[account(mut)]
+  pub token_account: AccountInfo<'info>,
+  #[account(mut)]
+  pub user: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct MakeBet<'info> {
+  #[account(mut)]
+  pub player: Account<'info, Player>,
+  #[account(mut)]
+  pub table: Account<'info, Table>,
+  #[account(signer)]
+  pub authority: AccountInfo<'info>,
+  #[account(mut)]
+  pub mint: AccountInfo<'info>,
+  #[account(mut)]
+  pub to: AccountInfo<'info>,
+  pub token_program: AccountInfo<'info>,
+}
+
+#[derive(Accounts)]
+pub struct GetHand<'info> {
   #[account(mut)]
   pub player: Account<'info, Player>,
   #[account(mut)]
@@ -189,6 +321,7 @@ pub struct Card {
 pub struct Deck {
   pub cards: Vec<Card>,
   pub val_map: Vec<CardMap>,
+  pub pile: Vec<Card>,
 }
 
 impl Deck {
@@ -196,6 +329,7 @@ impl Deck {
     let mut deck = Deck {
       cards: Vec::new(),
       val_map: Vec::new(),
+      pile: Vec::new(),
     };
 
     for i in 0..13 {
@@ -234,6 +368,17 @@ impl Deck {
     
     deck
   }
+
+  pub fn shuffle(&mut self) {
+
+  }
+
+  pub fn get_card(&mut self) -> Card {
+    let c = self.cards.pop().unwrap();
+    self.pile.push(c.clone());
+
+    c
+  }
 }
 
 #[derive(Debug, Clone, AnchorSerialize, AnchorDeserialize)]
@@ -246,6 +391,7 @@ pub struct CardMap {
 pub struct PlayerMap {
   pub key: Pubkey,
   pub value: Vec<Pubkey>,
+  pub token_account: Option<Pubkey>,
 }
 
 #[derive(Debug, Clone, AnchorSerialize, AnchorDeserialize)]
@@ -282,7 +428,7 @@ pub struct BaseAccount {
 
 #[account]
 pub struct Player {
-  pub hand: Vec<Card>,
+  pub hand: Vec<Card>, 
   pub stake: u64,
 }
 
@@ -304,4 +450,8 @@ pub enum ErrorCode {
   BigBet,
   #[msg("Bet size too small for table.")]
   SmallBet,
+  #[msg("Player not seated at table.")]
+  NotSeated,
+  #[msg("Seems a bet has not been made.")]
+  NoStake,
 }

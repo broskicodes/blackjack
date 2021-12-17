@@ -29,8 +29,9 @@ describe('blackjack', () => {
     assert.ok(account.numPlayerAcnts.toString() === "0");
   });
 
+  const player1 = anchor.web3.Keypair.generate();
+
   it('Creates accounts!', async () => {
-    const player1 = anchor.web3.Keypair.generate();
     const tx1 = await program.rpc.newPlayer({
       accounts: {
         player: player1.publicKey,
@@ -73,8 +74,8 @@ describe('blackjack', () => {
     assert.ok(account2.stake.toString() === "0");
   });
 
+  const table = anchor.web3.Keypair.generate();
   it('Creates tables!', async () => {
-    const table = anchor.web3.Keypair.generate();
     const tx1 = await program.rpc.newTable({
       accounts: {
         table: table.publicKey,
@@ -84,6 +85,7 @@ describe('blackjack', () => {
       },
       signers: [table]
     });
+
     // console.log("Your transaction signature", tx1);
 
     let account1 = await program.account.baseAccount.fetch(baseAccount.publicKey);
@@ -93,6 +95,20 @@ describe('blackjack', () => {
     let account2 = await program.account.table.fetch(table.publicKey);
     // console.log(account2);
     assert.ok(account2.deck.cards.length === 52);
+  });
+
+  it("Allows for players to connect to tables", async () => {
+    await program.rpc.connectToTable({
+      accounts: {
+        table: table.publicKey,
+        baseAccount: baseAccount.publicKey,
+        user: provider.wallet.publicKey,
+        player: player1.publicKey,
+      },
+    });
+
+    const account = await program.account.table.fetch(table.publicKey);
+    assert.ok(account.numPlayers.toString() === "1");
   });
 
 });

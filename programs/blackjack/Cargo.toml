@@ -18,3 +18,5 @@ default = []
 anchor-lang = "0.18.2"
 strum = "0.23.0"
 strum_macros = "0.23.0"
+anchor-spl = "0.18.2"
+spl-token = { version = "3.1.1", features = ["no-entrypoint"] }
