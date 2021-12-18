@@ -216,7 +216,31 @@ pub mod blackjack {
       }
       table.deck = deck.clone();
 
-      Ok(())
+      if player.hand.value == 21 {
+        let winnings = (player.stake * table.blackjack_ratio.mult) / table.blackjack_ratio.div;
+
+        let accounts = &mut ProxyMintTo {
+          mint: ctx.accounts.mint.clone(),
+          to: ctx.accounts.to.clone(),
+          authority: ctx.accounts.authority.clone(),
+          token_program: ctx.accounts.token_program.clone(),
+        };
+
+        let context = Context::new(ctx.accounts.token_program.key, accounts, &[]);
+        let result = token::proxy_mint_to(context, winnings);
+
+        deck.merge();
+        player.stake = 0;
+
+        result
+      } else if table.dealer.hand.value == 21 {
+        deck.merge();
+        player.stake = 0;
+
+        Ok(())
+      } else { 
+        Ok(())
+      }
     }
   }
 
@@ -237,6 +261,49 @@ pub mod blackjack {
       }
 
       Ok(())
+    }
+  }
+
+  pub fn stand(ctx: Context<Stand>) -> ProgramResult {
+    let table = &mut ctx.accounts.table;
+    let player = &mut ctx.accounts.player;
+
+    //Dealer logic
+    if player.stake == 0 {
+      Err(ErrorCode::NoStake.into())
+    } else{
+      let deck = &mut table.deck.clone();
+      let dealer = &mut table.dealer;
+      while dealer.hand.value < 17 {
+        let c = deck.get_card();
+        dealer.hand.add_card(c);
+      }
+
+      let result: ProgramResult;
+
+      if dealer.hand.is_bust || player.hand.value >= dealer.hand.value {
+        let winnings = match player.hand.value == dealer.hand.value {
+          true => player.stake,
+          false => (player.stake * table.payout_ratio.mult) / table.payout_ratio.div
+        };
+        
+        let accounts = &mut ProxyMintTo {
+          mint: ctx.accounts.mint.clone(),
+          to: ctx.accounts.to.clone(),
+          authority: ctx.accounts.authority.clone(),
+          token_program: ctx.accounts.token_program.clone(),
+        };
+
+        let context = Context::new(ctx.accounts.token_program.key, accounts, &[]);
+        result = token::proxy_mint_to(context, winnings);
+      } else {
+        result = Ok(());
+      }
+
+      table.deck.merge();
+      player.stake = 0;
+
+      result
     }
   }
 }
@@ -311,6 +378,13 @@ pub struct GetHand<'info> {
   pub player: Account<'info, Player>,
   #[account(mut)]
   pub table: Account<'info, Table>,
+  #[account(signer)]
+  pub authority: AccountInfo<'info>,
+  #[account(mut)]
+  pub mint: AccountInfo<'info>,
+  #[account(mut)]
+  pub to: AccountInfo<'info>,
+  pub token_program: AccountInfo<'info>,
 }
 
 #[derive(Accounts)]
@@ -319,6 +393,21 @@ pub struct Hit<'info> {
   pub player: Account<'info, Player>,
   #[account(mut)]
   pub table: Account<'info, Table>,
+}
+
+#[derive(Accounts)]
+pub struct Stand<'info> {
+  #[account(mut)]
+  pub player: Account<'info, Player>,
+  #[account(mut)]
+  pub table: Account<'info, Table>,
+  #[account(signer)]
+  pub authority: AccountInfo<'info>,
+  #[account(mut)]
+  pub mint: AccountInfo<'info>,
+  #[account(mut)]
+  pub to: AccountInfo<'info>,
+  pub token_program: AccountInfo<'info>,
 }
 
 #[derive(Debug, EnumIter, Copy, Clone, AnchorDeserialize, AnchorSerialize)]
@@ -406,7 +495,15 @@ impl Deck {
   }
 
   pub fn shuffle(&mut self) {
+    let n = self.cards.len();
 
+    let mut j: usize;
+    for i in 0..n-1 {
+      j = random(i, n);
+      let temp = self.cards[i];
+      self.cards[i] = self.cards[j];
+      self.cards[j] = temp;
+    }
   }
 
   pub fn get_card(&mut self) -> Card {

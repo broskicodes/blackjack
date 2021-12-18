@@ -118,6 +118,10 @@ describe('game', () => {
       accounts: {
         player: player.publicKey,
         table: table.publicKey,
+        authority: provider.wallet.publicKey,
+        mint,
+        to: tokenAccount,
+        tokenProgram: TokenInstructions.TOKEN_PROGRAM_ID,
       },
     });
 
@@ -126,7 +130,7 @@ describe('game', () => {
     assert.ok(account1.deck.cards.length === 48);
 
     let account2 = await program.account.player.fetch(player.publicKey);
-    // console.log(account2.hand);
+    console.log(account2.hand);
     assert.ok(account2.hand.cards.length === 2);
   });
 
@@ -140,10 +144,55 @@ describe('game', () => {
 
     let account1 = await program.account.table.fetch(table.publicKey);
     // console.log(account1.playerAccounts[0].key, account1.playerAccounts[0].value);
-    assert.ok(account1.deck.cards.length === 52);
+    // assert.ok(account1.deck.cards.length === 52);
 
     let account2 = await program.account.player.fetch(player.publicKey);
-    // console.log(account2.hand);
-    assert.ok(account2.stake.toString() === "0");
+    console.log(account2.hand);
+    assert.ok(account2.hand.cards.length === 3);
+  });
+
+  it("Stands!", async () => {
+    await program.rpc.makeBet(new anchor.BN(100), {
+      accounts: {
+        player: player.publicKey,
+        table: table.publicKey,
+        authority: provider.wallet.publicKey,
+        mint,
+        to: tokenAccount,
+        tokenProgram: TokenInstructions.TOKEN_PROGRAM_ID,
+      }
+    });
+
+    await program.rpc.getHand({
+      accounts: {
+        player: player.publicKey,
+        table: table.publicKey,
+        authority: provider.wallet.publicKey,
+        mint,
+        to: tokenAccount,
+        tokenProgram: TokenInstructions.TOKEN_PROGRAM_ID,
+      },
+    });
+
+    await program.rpc.stand({
+      accounts: {
+        player: player.publicKey,
+        table: table.publicKey,
+        authority: provider.wallet.publicKey,
+        mint,
+        to: tokenAccount,
+        tokenProgram: TokenInstructions.TOKEN_PROGRAM_ID,
+      }
+    });
+
+    let account = await program.account.table.fetch(table.publicKey);
+    // console.log(account1.playerAccounts[0].key, account1.playerAccounts[0].value);
+    assert.ok(account.deck.cards.length === 52);
+    account = await program.account.player.fetch(player.publicKey);
+    console.log(account.hand);
+    assert.ok(account.stake.toString() === "0");
+    
+    // account = await getTokenAccount(provider, tokenAccount);
+    // assert.ok(account.amount.eq(new anchor.BN(900)));
   });
 });
