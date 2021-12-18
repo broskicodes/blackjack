@@ -499,10 +499,10 @@ impl Deck {
 
     let mut j: usize;
     for i in 0..n-1 {
-      j = random(i, n);
-      let temp = self.cards[i];
-      self.cards[i] = self.cards[j];
-      self.cards[j] = temp;
+      j = Deck::random(i, n);
+      let temp = self.cards[i].clone();
+      self.cards[i] = self.cards[j].clone();
+      self.cards[j] = temp.clone();
     }
   }
 
@@ -516,6 +516,15 @@ impl Deck {
   pub fn merge(&mut self) {
     self.cards.append(&mut self.pile);
     self.pile = Vec::new();
+  }
+
+  pub fn random(min: usize, max: usize) -> usize {
+    let diff = max - min;
+
+    let i = min.pow(4) - 2 * max;
+    let ret = i % diff;
+
+    ret + min
   }
 }
 
